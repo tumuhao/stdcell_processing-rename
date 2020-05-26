@@ -1,0 +1,353 @@
+#!/usr/bin/env python3
+# -*- coding: UTF-8 -*-
+
+import re
+import os,stat
+import shutil
+import sys
+import xlsxwriter
+import xlrd
+#print("arguments number is", len(sys.argv))
+
+if len(sys.argv) < 3:
+	print("stdcell path and processing type are needed for finding and processing stdce libs")
+	print("Open readme for more information ")
+	exit(0)
+elif (not os.getenv('PROJECT')) or (not os.getenv('pdkName')):
+	print("env PROJECT or pdkName is not defined")
+	exit(0)
+elif len(sys.argv) > 2:
+	StdcellPath = sys.argv[1]
+	processtype=sys.argv[2]
+
+curtdir=os.getcwd()
+
+### find the stdcellliblist infos
+
+stdcellliblist=[]
+if os.path.isdir(StdcellPath):
+	for stdcelllib in os.listdir(StdcellPath):
+		if (not re.search("\/\.",StdcellPath  + "/" + stdcelllib)) and (os.path.isdir(StdcellPath  + "/" + stdcelllib)):
+			#print(StdcellPath  + "/" + stdcelllib)
+			stdcellliblist.append(StdcellPath  + "/" + stdcelllib)
+	stdcellliblist.sort()
+else:
+	print("make sure that provided stdcell path is correct")
+#print(stdcellliblist)
+
+
+def find_file(path,name):
+	file_list=[]
+	for root,dirs,files in os.walk(path):
+		for file in files:
+			if re.search(name,file.lower()) and os.path.isfile(os.path.join(root,file)) and re.search("\.",file.lower()):
+				file_list.append(os.path.join(root,file))
+	return file_list
+
+### arrange stdcell function
+
+def stdcell_arrange(stdcellinfo):
+	libinfolist=stdcellinfo
+	with open(curtdir+"/arrange_commands", 'w') as cmds:
+		for libinfo in libinfolist:
+			#if re.search("_LVT_", libinfo):
+				lib0=os.path.split(libinfo)
+				libname=lib0[1]
+				libpath=lib0[0]
+				cmds.write("\ncd " + libinfo)
+				cmds.write("\nmkdir source; mv ./* source")
+	
+				for file in os.listdir(libinfo):
+					if re.match("verilog", file.lower()):
+						cmds.write("\nln -s "+"source/"+ file+" verilog") 
+					elif re.match("gds", file.lower()):
+						cmds.write("\nln -s "+"source/"+ file+" gds")
+					elif re.match("cdl", file.lower()):
+						cmds.write("\nln -s "+"source/"+ file+" spice")
+					elif re.match("spf", file.lower()):
+						cmds.write("\nmkdir lpe_spice")
+						cmds.write("\ncat source/"+ file+"/TYPICAL/*.spf >> lpe_spice/"+libname+".spice")
+					elif re.match("doc", file.lower()):
+						cmds.write("\nln -s "+"source/"+ file+" Documentation")
+					elif re.match("cdn_symbol", file.lower()):
+						cmds.write("\nln -s "+"source/"+ file+" cdk")
+					elif re.match("lef", file.lower()):
+						cmds.write("\nln -s "+"source/"+ file+" lef")
+					elif re.match("lib", file.lower()):
+						cmds.write("\nln -s "+"source/"+ file+" lib")
+					elif re.match("script", file.lower()):
+						cmds.write("\nln -s "+"source/"+ file+" scripts")
+					elif re.match("dfii", file.lower()):
+						cmds.write("\nln -s "+"source/"+ file+" dfII")
+				#cmds.write("\ncd " + curtdir)
+				cmds.write("\necho --------------------------------")
+				
+### create dfII lib function
+def stdcell_dfii(stdcellinfo):
+	libinfolist=stdcellinfo
+	cdslib=open(curtdir+"/cds.lib", 'w')
+	cmds=open(curtdir+"/dfii_cmds", 'w')
+	replay_file=open(curtdir+"/replay_file",'w')
+	copy_cmds=open(curtdir+"/dfII_copy_cmds",'w')
+
+	cdslib.write("INCLUDE   $(inst_root_with:tools/dfII/bin/virtuoso)/share/cdssetup/dfII/cds.lib\n")
+	cdslib.write("DEFINE "+os.getenv('pdkName')+" "+os.getenv('PDK_CSD_DIR')+"/"+os.getenv('pdkName'))
+	replay_file.write("load(\"/local/method/scripts/skill/beta/6.1.0/CsdCreateLibSpectreTermOrderFromSpice.il\")\n")
+	replay_file.write("load(\"/local/method/scripts/skill/beta/6.1.0/CsdCreateLibCdlTermOrderFromFile.il\")\n")
+
+	for libinfo in libinfolist:
+		#if re.search("_LVT_", libinfo):
+			print(libinfo)
+			lib0=os.path.split(libinfo)
+			libname=lib0[1]
+			libpath=lib0[0]
+			cdslib.write("\nDEFINE "+libname+" "+curtdir+"/dfII/"+libname)
+
+			oalibfile=find_file(libinfo,".oalib")
+			tmp=os.path.split(oalibfile[0])
+			symbolfolder=tmp[0]
+			gdsfile=find_file(libinfo,".gds")[0]
+			cdlfile=find_file(libinfo,".cdl")[0]
+			leffile=find_file(libinfo,".lef")[0]
+#			if (os.path.exists(libinfo+"/cdk")) and (os.path.exists(libinfo+"/gds")) and (os.path.exists(libinfo+"/gds")) and (os.path.exists(libinfo+"/lef")):
+			if (os.path.exists(gdsfile)) and (os.path.exists(cdlfile)) and (os.path.exists(leffile)) and (os.path.exists(symbolfolder)):
+				cmds.write("\necho begin processing "+libname)
+				replay_file.write("csh( \"mkdir -p " + curtdir + "/dfII/" + libname+"\" )\n")
+				replay_file.write("csh( \"cp -rf " + symbolfolder+"/* dfII/" + libname+"\" )\n")
+				replay_file.write("ddUpdateLibList()\n")
+				replay_file.write("dsLib=ddGetObj(\""+libname+"\")\n")
+				replay_file.write("techBindTechFile(dsLib \""+os.getenv('pdkName')+"\")\n")
+#				replay_file.write("csh(\"strmin -library "+libname+" -strmFile "+gdsfile+" -layermap "+os.getenv('GDS_LAYERMAP')+" -logfile "+libname+"_stmin.log\")\n\n")
+#				replay_file.write("csh(\"lefin -lef "+leffile+" -lib "+libname+" -libPath "+curtdir+"/dfII/"+libname+" -log "+libname+"_lefin.log\")\n")
+				cmds.write("\nlefin -lef "+leffile+" -lib "+libname+" -libPath "+curtdir+"/dfII/"+libname+" -log "+libname+"_lefin.log\n")
+				cmds.write("\nstrmin -library "+libname+" -strmFile "+gdsfile+" -layermap "+os.getenv('GDS_LAYERMAP')+" -logfile "+libname+"_stmin.log\n\n\n")
+				replay_file.write("CsdCreateLibCdlTermOrderFromFileProc(\""+libname+"\" \""+cdlfile+"\" \"./"+libname+"_createcdl.log\")\n")
+				replay_file.write("CsdCreateLibSpectreTermOrderFromSpiceProc(\""+libname+"\" \""+cdlfile+"\" \"./"+libname+"_createspectre.log\")\n\n\n")
+			else:
+				cmds.write("\nERROR: check if symbolfolder cdl gds lef exist in "+libinfo)
+				cdslib.write("\nDEFINE "+libname+" "+curtdir+"/dfII/"+libname)
+			copy_cmds.write("mkdir -p "+libinfo+"/dfII\n")
+			copy_cmds.write("copy -rf "+curtdir+"/dfII/"+libname+" "+libinfo+"/dfII\n")
+	cmds.write("\necho copy the FDCAP symbols first and then do dfII generation")
+	replay_file.write("csh(\"source ./dfii_cmds\")\n")
+### create pgv_pre data function
+def pgv_pre(stdcellinfo,techlef,lefdefmap):
+	copy_cmds=open(curtdir+"/pgv_copy_cmds",'w')
+	os.system('rm -rf *.xlsx')
+	libinfolist=stdcellinfo
+	header_list=['StdcellPath','Corner','TechLef','StdcellLef','StdcellCDL','GoundPins','PowerPins','QRCTechfile','Temperature','SpiceModel','FillerCells','DecapCells','CellList','LefLayermap']
+	file_name = "pgv_table.xlsx"
+	workbook = xlsxwriter.Workbook(file_name)
+	worksheet = workbook.add_worksheet('infos')
+	for i in range(len(header_list)):
+		#print(header_list[i])
+		worksheet.write(0,i,header_list[i])
+	### process specific libs
+	libinfolist_new=[]
+	for libinfolist0 in libinfolist:
+		#if re.search("_LVT_",libinfolist0):
+			libinfolist_new.append(libinfolist0)
+	for i in range(len(libinfolist_new)):
+		### lib name
+		arr_stdcellinfo2=os.path.split(libinfolist_new[i])
+		print(arr_stdcellinfo2[1])
+		copy_cmds.write("mkdir -p "+libinfolist_new[i]+"/pgv\n")
+		copy_cmds.write("cp -rf "+curtdir+"/dbs/"+arr_stdcellinfo2[1]+"* "+libinfolist_new[i]+"/pgv\n")
+
+		worksheet.set_column(0,0,len(str(arr_stdcellinfo2[1])))
+		worksheet.write(i*4 + 1,0,arr_stdcellinfo2[1])
+		worksheet.write(i*4 + 2,0,arr_stdcellinfo2[1])
+		worksheet.write(i*4 + 3,0,arr_stdcellinfo2[1])
+		### corner
+		worksheet.write(i*4 + 1,1,"ML")
+		worksheet.write(i*4 + 2,1,"TC")
+		worksheet.write(i*4 + 3,1,"WC")
+		### techlef
+		if not techlef == "":
+			worksheet.set_column(2,2,len(str(techlef)))
+			worksheet.write(i*4 + 1,2,techlef)
+			worksheet.write(i*4 + 2,2,techlef)
+			worksheet.write(i*4 + 3,2,techlef)
+		### find cdl lef cell_list files
+		leffile=find_file(libinfolist_new[i],".lef")[0]
+		cdlfile=find_file(libinfolist_new[i],".cdl")[0]
+		qrcfiles=find_file(os.getenv('QRC_PVS_PROCESS_DIR'),"qrctechfile")
+		celllistfile=find_file(libinfolist_new[i],"cell_list")[0]
+
+		if (os.path.exists(leffile) and os.path.exists(cdlfile) ):
+			worksheet.set_column(3,3,len(str(leffile)))
+			worksheet.write(i*4 + 1,3,leffile)
+			worksheet.write(i*4 + 2,3,leffile)
+			worksheet.write(i*4 + 3,3,leffile)
+
+			worksheet.set_column(4,4,len(str(cdlfile)))
+			worksheet.write(i*4 + 1,4,cdlfile)
+			worksheet.write(i*4 + 2,4,cdlfile)
+			worksheet.write(i*4 + 3,4,cdlfile)
+	
+		if os.path.exists(celllistfile):
+			worksheet.set_column(12,12,len(str(cdlfile)))
+			worksheet.write(i*4 + 1,12,celllistfile)
+			worksheet.write(i*4 + 2,12,celllistfile)
+			worksheet.write(i*4 + 3,12,celllistfile)
+		else:
+			os.system("grep .ENDS "+cdlfile+" | awk '{print $2}' >>"+arr_stdcellinfo2[1]+".cell_list")
+			worksheet.write(i*4 + 3,12,arr_stdcellinfo2[1]+".cell_list")
+		### model_path and model file
+		os.system("rm *.sp")
+		model_path=os.getenv('MODELS_DIR')
+		tt_model=".lib "+model_path+"/mos.scs t\n.lib "+model_path+"/mos18.scs t\n.lib "+model_path+"/resistor.scs t\n.lib "+model_path+"/mom_cap.scs t"
+		ff_model=".lib "+model_path+"/mos.scs f\n.lib "+model_path+"/mos18.scs f\n.lib "+model_path+"/resistor.scs f\n.lib "+model_path+"/mom_cap.scs f"
+		ss_model=".lib "+model_path+"/mos.scs s\n.lib "+model_path+"/mos18.scs s\n.lib "+model_path+"/resistor.scs s\n.lib "+model_path+"/mom_cap.scs s"
+		os.system("touch SpiceModel_TT.sp; touch SpiceModel_FF.sp;touch SpiceModel_SS.sp")
+		ff_model_file=open("SpiceModel_FF.sp","w")
+		tt_model_file=open("SpiceModel_TT.sp","w")
+		ss_model_file=open("SpiceModel_SS.sp","w")
+		ff_model_file.write(ff_model)
+		tt_model_file.write(tt_model)
+		ss_model_file.write(ss_model)
+
+		worksheet.write(i*4 + 1,9,curtdir+"/SpiceModel_FF.sp")
+		worksheet.write(i*4 + 2,9,curtdir+"/SpiceModel_TT.sp")
+		worksheet.write(i*4 + 3,9,curtdir+"/SpiceModel_SS.sp")
+		worksheet.write(i*4 + 1,9,curtdir+"/SpiceModel_FF.sp")
+		worksheet.write(i*4 + 2,9,curtdir+"/SpiceModel_TT.sp")
+		worksheet.write(i*4 + 3,9,curtdir+"/SpiceModel_SS.sp")
+		worksheet.write(i*4 + 1,9,curtdir+"/SpiceModel_FF.sp")
+		worksheet.write(i*4 + 2,9,curtdir+"/SpiceModel_TT.sp")
+		worksheet.write(i*4 + 3,9,curtdir+"/SpiceModel_SS.sp")
+		### lefdef map for SMIC14
+		if not lefdefmap == "":
+			worksheet.set_column(13,13,len(str(lefdefmap)))
+			worksheet.write(i*4 + 1,13,lefdefmap)
+			worksheet.write(i*4 + 1,13,lefdefmap)
+			worksheet.write(i*4 + 1,13,lefdefmap)
+			worksheet.write(i*4 + 2,13,lefdefmap)
+			worksheet.write(i*4 + 2,13,lefdefmap)
+			worksheet.write(i*4 + 2,13,lefdefmap)
+			worksheet.write(i*4 + 3,13,lefdefmap)
+			worksheet.write(i*4 + 3,13,lefdefmap)
+			worksheet.write(i*4 + 3,13,lefdefmap)
+		### Temperature
+		worksheet.write(i*4 + 1,8,"125")
+		worksheet.write(i*4 + 2,8,"85")
+		worksheet.write(i*4 + 3,8,"125")
+		### qrctechfile
+		for qrcfile in qrcfiles:
+			if re.search("worst", qrcfile.lower()):
+				worksheet.write(i*4 + 1,7,qrcfile)
+				worksheet.write(i*4 + 3,7,qrcfile)
+			elif re.search("typical", qrcfile.lower()):
+				worksheet.write(i*4 + 2,7,qrcfile)
+		### tmp others
+		worksheet.write(i*4 + 1,5,"VSS VPW")
+		worksheet.write(i*4 + 2,5,"VSS VPW")
+		worksheet.write(i*4 + 3,5,"VSS VPW")
+
+		worksheet.write(i*4 + 1,6,"VDD 0.88 VNW 0.88")
+		worksheet.write(i*4 + 2,6,"VDD 0.80 VNW 0.80")
+		worksheet.write(i*4 + 3,6,"VDD 0.72 VNW 0.72")
+
+		worksheet.write(i*4 + 1,10,"F_FILL*")
+		worksheet.write(i*4 + 2,10,"F_FILL*")
+		worksheet.write(i*4 + 3,10,"F_FILL*")
+
+		worksheet.write(i*4 + 1,11,"FDCAP*")
+		worksheet.write(i*4 + 2,11,"FDCAP*")
+		worksheet.write(i*4 + 3,11,"FDCAP*")
+	workbook.close()
+### create pgv database function
+def pgv(stdcellinfo):
+	libinfolist=stdcellinfo
+	### touch scr cmd file
+	os.system("touch ./gen_pgv_stdcell")
+	gen_pgv=open(curtdir+"/gen_pgv_stdcell", 'w')
+	os.chmod(curtdir+"/gen_pgv_stdcell",stat.S_IRWXU)
+	gen_pgv.write("#!/bin/tcsh -f\n")
+
+	if os.path.isdir('dbs') or os.path.isdir('scr') or os.path.isdir('libgen_run') or os.path.isdir('logs'):
+		os.system("rm -rf dbs; rm -rf scr; rm -rf libgen_run; rm -rf logs")
+		os.system("mkdir dbs; mkdir scr; mkdir libgen_run; mkdir logs")
+	### read table
+	table_name = "pgv_table.xlsx"
+	if not os.path.isfile(table_name):
+		print (pgv_table is not found)
+		sys.exit()
+	data = xlrd.open_workbook(table_name)
+	data.sheet_names()
+	table = data.sheet_by_index(0)
+	nrows = table.nrows
+	ncols = table.ncols
+
+	for i in range(1,nrows):
+		if not table.cell_value(i,0) == "":
+			run_name=table.cell_value(i,0)+"_"+table.cell_value(i,1)
+			gen_pgv.write("set libgen_"+run_name+" = \"\"\n")
+			gen_pgv.write("libgen_"+run_name+":\n")
+			gen_pgv.write("  set libgen_"+run_name+"=`bsub -J gen_pgv_of_"+table.cell_value(i,0)+" libgen_run/libgen_"+run_name+" | awk \'{print $2}\' | sed \'s/[<>]//g\'`\n")
+			gen_pgv.write("  echo job gen_pgv_of_"+table.cell_value(i,0)+" $libgen_"+run_name+" is submitted\n\n")
+
+			### libgen_run
+			libgen_run_file=open("libgen_run/libgen_"+run_name,'w')
+			os.chmod("libgen_run/libgen_"+run_name,stat.S_IRWXU)
+			libgen_run_file.write("#!/bin/csh\n")
+			libgen_run_file.write("module load ssv/181/18.10.000\n")
+			libgen_run_file.write("mkdir "+curtdir+"/libgen_run/"+run_name+"\n")
+			libgen_run_file.write("cd "+curtdir+"/libgen_run/"+run_name+"\n")
+			libgen_run_file.write("ln -sf "+curtdir+"/scr\n")
+			libgen_run_file.write("ln -sf "+curtdir+"/dbs\n")
+			libgen_run_file.write("ln -sf "+curtdir+"/logs\n")
+			libgen_run_file.write("ln -sf "+curtdir+"/libgen_run/"+run_name+"\n")
+			libgen_run_file.write("bsub -Is -R \"span[hosts=1]\" -q interactive -J libgen_"+run_name+" xterm -e voltus -init scr/"+run_name+".tcl -log logs/"+run_name+".log\n")
+			libgen_run_file.write("cd "+curtdir+"\n")
+			libgen_run_file.write("exit\n")
+			libgen_run_file.close
+
+			### scr
+			scr_file=open("scr/"+run_name+".tcl",'w')
+			os.chmod("scr/"+run_name+".tcl",stat.S_IRWXU)
+			scr_file.write("set lef {}\n")
+			scr_file.write("lappend lef "+table.cell_value(i,2)+"\n")
+			scr_file.write("lappend lef "+table.cell_value(i,3)+"\n")
+			scr_file.write("set spice_subckts {}\n")
+			scr_file.write("lappend spice_subckts "+table.cell_value(i,4)+"\n")
+			scr_file.write("read_lib -lef $lef\n")
+			scr_file.write("set_pg_library_mode \\\n")
+			scr_file.write("  -celltype	stdcells \\\n")
+			scr_file.write("  -current_distribution propagation \\\n")
+			scr_file.write("  -ground_pins	{"+table.cell_value(i,5)+"} \\\n")
+			scr_file.write("  -power_pins	{"+table.cell_value(i,6)+"} \\\n")
+			scr_file.write("  -extraction_tech_file	"+table.cell_value(i,7)+" \\\n")
+			scr_file.write("  -temperature	"+table.cell_value(i,8)+" \\\n")
+			scr_file.write("  -spice_subckts	$spice_subckts  \\\n")
+			scr_file.write("  -spice_models	"+table.cell_value(i,9)+" \\\n")
+			scr_file.write("  -filler_cells	{"+table.cell_value(i,10)+"} \\\n")
+			scr_file.write("  -decap_cells	{"+table.cell_value(i,11)+"} \\\n")
+			scr_file.write("  -cell_list_file	"+table.cell_value(i,12)+" \\\n")
+			scr_file.write("  -lef_layermap	"+table.cell_value(i,13)+" \n")
+			scr_file.write("generate_pg_library -output dbs/"+run_name+"\n")
+			scr_file.write("exit\n")
+			scr_file.close
+
+### main function
+
+if processtype.lower() == "arrange":
+	os.system("rm arrange_commands; touch "+curtdir+"/arrange_commands")
+	stdcell_arrange(stdcellliblist)
+elif processtype.lower() == "dfii":
+	if os.path.exists(curtdir+"/dfII") or os.path.exists(curtdir+"/cds.lib") or os.path.exists(curtdir+"/replay_file"):
+		os.system("rm -rf dfII; rm cds.lib; rm replay_file; touch cds.lib; touch replay_file")
+	stdcell_dfii(stdcellliblist)
+	#print(stdcellliblist)
+elif processtype.lower() == "pgv_pre":
+	#if os.path.isfile("./"):
+		#os.system("rm -rf pgv; mkdir -p pgv/dbs; mkdir -p pgv/genpgv_run; mkdir -p pgv/src")
+	techlef="/process/smicN14/sfp/stdcell/TF/v1p0_rev1/1P9M_DV_3DM_Q1_3Q2_2TMa_ALPA2_ant_sfplus.lef"
+	lefdefmap="/proj/kdteng1/user/yujie/design/cdn_hs_phy_top/IREM/SMIC14/data/lefdef.layermap"
+	pgv_pre(stdcellliblist,techlef,lefdefmap)
+elif processtype.lower() == "pgv":
+	if os.path.isfile("./gen_pgv_stdcell"):
+		os.system("rm gen_pgv_stdcell")
+	pgv(stdcellliblist)
+
+
