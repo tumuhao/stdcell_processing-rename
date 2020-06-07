@@ -1,0 +1,29 @@
+#!/usr/bin/env python
+#coding:utf-8
+#create by Fangjian DU
+#modify file name
+
+import sys,os,re
+
+def newName(oldstr,newstr):
+    curtdir="F:\MCU后端设计(Innovus)"
+    for dirs in os.listdir(curtdir):
+        print(dirs+"\n")
+        os.chdir(curtdir+"\\"+dirs)
+        dirname = os.listdir(curtdir+"\\"+dirs)
+        p=re.compile(oldstr)
+        for item in dirname:        
+            os.rename(item,p.sub(newstr,item))
+    return 0;
+
+if __name__ == '__main__': 
+    oldtext = input("输入含正则表达式的字符串，特殊字符用\转义:")
+    newtext = input("输入要更替换的字符串，要替换空，直接回车:")
+    result = newName(oldtext,newtext)
+
+    if result == 0:
+        print('转换成功')
+    else:
+        print('转换出现问题')
+        
+        input("\n回车退出")
